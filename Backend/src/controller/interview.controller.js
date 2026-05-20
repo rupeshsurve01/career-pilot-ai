@@ -1,32 +1,58 @@
-const pdfParse = require("pdf-parse");
+const { PDFParse } = require("pdf-parse");
 const generateInterviewReport = require("../services/ai.service");
 const interviewReportModel = require("../models/interviewReport.model");
 
 async function generateInterviewReportController(req, res) {
-  const resumeContent = await new pdfParse.PDFparse(
-    Uint8Array.from(req.file.buffer),
-  ).getText();
+  try {
+    const { resumeDescription, jobDescription } = req.body;
+    let resumeText = "";
 
-  const { resumeDescription, jobDescription } = req.body;
+    if (req.file?.buffer) {
+      const parser = new PDFParse({ data: req.file.buffer });
+      const resumeContent = await parser.getText();
+      resumeText = resumeContent.text;
+      await parser.destroy();
+    }
 
-  const interViewReportByAi = await generateInterviewReport({
-    resume: resumeContent.text,
-    resumeDescription,
-    jobDescription,
-  });
+    const interViewReportByAi = await generateInterviewReport({
+      resume: resumeText,
+      selfDescription: resumeDescription,
+      jobDescription,
+    });
 
-  const interviewReport = await interviewReportModel.create({
-    user: req.user.id,
-    resume: resumeContent.text,
-    selfDescription: resumeDescription,
-    jobDescription,
-    ...interViewReportByAi,
-  });
+    const title =
+      interViewReportByAi?.title?.trim() ||
+      jobDescription?.split("\n")[0]?.trim() ||
+      "Interview Report";
 
-  res.status(201).json({
-    message: "Interview Report Generated Sucessfully",
-    interviewReport,
-  });
+    const interviewReport = await interviewReportModel.create({
+      user: req.user.id,
+      resume: resumeText,
+      selfDescription: resumeDescription,
+      jobDescription,
+      ...interViewReportByAi,
+      title,
+    });
+
+    res.status(201).json({
+      message: "Interview Report Generated Sucessfully",
+      interviewReport,
+    });
+  } catch (error) {
+    console.error(error);
+
+    const status = error?.status || error?.error?.code;
+
+    if (status === 503) {
+      return res.status(503).json({
+        message: "AI service is busy right now. Please try again in a moment.",
+      });
+    }
+
+    return res.status(500).json({
+      message: "Failed to generate interview report.",
+    });
+  }
 }
 
 async function getInterviewReportByIdController(req, res) {
@@ -51,7 +77,7 @@ async function getAllInterviewController(req, res) {
     .find({ user: req.user.id })
     .sort({ createdAt: -1 })
     .select(
-      "-resume -selfDescription -jobDescription -_v -technicalQuestions -behavioralQuestion -skillGaps -preparationPlan",
+      "-resume -selfDescription -jobDescription -_v -technicalQuestions -behavioralQuestions -skillGaps -preparationPlan",
     );
 
   return res.status(200).json(interviewReports);
