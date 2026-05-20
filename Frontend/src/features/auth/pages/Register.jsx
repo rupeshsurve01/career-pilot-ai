@@ -1,6 +1,6 @@
 import { useState } from "react";
-import React from "react";
 import { useNavigate, Link } from "react-router";
+import "../auth.form.scss";
 import { useAuth } from "../hooks/useAuth";
 
 const Register = () => {
@@ -16,15 +16,15 @@ const Register = () => {
     e.preventDefault();
     await handleRegister({ username, email, password });
     navigate("/");
-
-    if (loading) {
-      return (
-        <main>
-          <h1>Loading......</h1>
-        </main>
-      );
-    }
   };
+
+  if (loading) {
+    return (
+      <main>
+        <h1>Loading......</h1>
+      </main>
+    );
+  }
 
   return (
     <main>

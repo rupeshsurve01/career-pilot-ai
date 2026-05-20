@@ -13,8 +13,11 @@ export const generateInterviewReport = async ({
   const formData = new FormData();
 
   formData.append("jobDescription", jobDescription);
+  formData.append("resumeDescription", selfDescription);
   formData.append("selfDescription", selfDescription);
-  formData.append("resume", resumeFile);
+  if (resumeFile) {
+    formData.append("single", resumeFile);
+  }
 
   const response = await api.post("/api/interview", formData, {
     headers: {
@@ -25,14 +28,14 @@ export const generateInterviewReport = async ({
   return response.data;
 };
 
-export const getInterviewReportById = async (InterviewId) => {
-  const response = await api.get(`/api/interview/`);
+export const getInterviewReportById = async (interviewId) => {
+  const response = await api.get(`/api/interview/report/${interviewId}`);
 
-  return response.data;
+  return { interviewReport: response.data };
 };
 
 export const getAllInterviewReports = async () => {
   const response = await api.get("/api/interview/");
 
-  return response.data;
+  return { interviewReports: response.data };
 };
