@@ -1,8 +1,7 @@
-import { getAllInterviewReports, generateInterviewReport, getInterviewReportById } from "../services/interview.api"
 import { useCallback, useContext, useEffect } from "react"
 import { InterviewContext } from "../interviewContext"
 import { useParams } from "react-router"
-
+import { getAllInterviewReports, generateInterviewReport, getInterviewReportById, generateResumePdf } from "../services/interview.api"
 
 export const useInterview = () => {
 
@@ -13,7 +12,7 @@ export const useInterview = () => {
         throw new Error("useInterview must be used within an InterviewProvider")
     }
 
-    const { loading, setLoading, report, setReport, reports, setReports, error, setError } = context
+    const { loading, setLoading, report, setReport, reports, setReports, setError } = context
 
     const generateReport = async ({ jobDescription, selfDescription, resumeFile }) => {
         setLoading(true)
@@ -67,14 +66,30 @@ export const useInterview = () => {
         return response?.interviewReports ?? []
     }, [ setLoading, setReports, setError ])
 
+    const getResumePdf = async (interviewReportId) => {
+        setLoading(true)
+        try {
+            const response = await generateResumePdf({ interviewReportId })
+            const url = window.URL.createObjectURL(new Blob([ response ], { type: "application/pdf" }))
+            const link = document.createElement("a")
+            link.href = url
+            link.setAttribute("download", `resume_${interviewReportId}.pdf`)
+            document.body.appendChild(link)
+            link.click()
+        }
+        catch (error) {
+            console.log(error)
+        } finally {
+            setLoading(false)
+        }
+    }
+
+
     useEffect(() => {
-        if (interviewId) {
-            getReportById(interviewId)
-        } else {
+        if (!interviewId) {
             getReports()
         }
-    }, [ interviewId, getReportById, getReports ])
+    }, [ interviewId, getReports ])
 
-    return { loading, report, reports, error, generateReport, getReportById, getReports }
-
+ return { loading, report, reports, generateReport, getReportById, getReports, getResumePdf }
 }
