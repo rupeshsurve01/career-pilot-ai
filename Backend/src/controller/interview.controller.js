@@ -87,27 +87,56 @@ async function getAllInterviewController(req, res) {
 /**
  * @description Controller to generate resume PDF based on user self description, resume and job description.
  */
-async function generateResumePdfController(req, res) {
-    const { interviewReportId } = req.params
 
-    const interviewReport = await interviewReportModel.findById(interviewReportId)
+async function generateResumePdfController(req, res) {
+  try {
+    const { interviewReportId } = req.params;
+
+    const interviewReport =
+      await interviewReportModel.findById(interviewReportId);
 
     if (!interviewReport) {
-        return res.status(404).json({
-            message: "Interview report not found."
-        })
+      return res.status(404).json({
+        message: "Interview report not found.",
+      });
     }
 
-    const { resume, jobDescription, selfDescription } = interviewReport
+    const {
+      resume,
+      jobDescription,
+      selfDescription,
+    } = interviewReport;
 
-    const pdfBuffer = await generateResumePdf({ resume, jobDescription, selfDescription })
+    const pdfBuffer = await generateResumePdf({
+      resume,
+      jobDescription,
+      selfDescription,
+    });
 
-    res.set({
-        "Content-Type": "application/pdf",
-        "Content-Disposition": `attachment; filename=resume_${interviewReportId}.pdf`
-    })
+    if (!pdfBuffer) {
+      return res.status(500).json({
+        message: "PDF generation failed",
+      });
+    }
 
-    res.send(pdfBuffer)
+    res.setHeader("Content-Type", "application/pdf");
+
+    res.setHeader(
+      "Content-Disposition",
+      `attachment; filename=resume_${interviewReportId}.pdf`
+    );
+
+    res.setHeader("Content-Length", pdfBuffer.length);
+
+    return res.end(pdfBuffer);
+
+  } catch (error) {
+    console.log("PDF ERROR:", error);
+
+    return res.status(500).json({
+      message: error.message || "Failed to generate resume PDF",
+    });
+  }
 }
 
 module.exports = { generateInterViewReportController, getInterviewReportByIdController, getAllInterviewController, generateResumePdfController }
