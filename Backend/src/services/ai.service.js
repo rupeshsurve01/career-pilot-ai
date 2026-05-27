@@ -80,6 +80,120 @@ const resumeSchema = z.object({
     .default([]),
 });
 
+const outputSchema = resumeSchema.extend({
+  analysis: z.object({
+    matchScore: z.number().min(0).max(100),
+    missingKeywords: z.array(z.string()),
+    improvementSuggestions: z.array(z.string()),
+  }),
+});
+
+const interviewReportSchema = z.object({
+  title: z.string().min(1),
+  matchScore: z.number().min(0).max(100),
+  technicalQuestions: z.array(
+    z.object({
+      question: z.string().min(1),
+      intention: z.string().min(1),
+      answer: z.string().min(1),
+    }),
+  ),
+  behavioralQuestions: z.array(
+    z.object({
+      question: z.string().min(1),
+      intention: z.string().min(1),
+      answer: z.string().min(1),
+    }),
+  ),
+  skillGaps: z.array(
+    z.object({
+      skill: z.string().min(1),
+      severity: z.enum(["low", "medium", "high"]),
+    }),
+  ),
+  preparationPlan: z.array(
+    z.object({
+      day: z.number().int().min(1),
+      focus: z.string().min(1),
+      tasks: z.array(z.string().min(1)).min(1),
+    }),
+  ),
+});
+
+const MODELS = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash"];
+
+function extractResponseText(response) {
+  if (typeof response?.text === "string") {
+    return response.text;
+  }
+
+  if (typeof response?.text === "function") {
+    return response.text();
+  }
+
+  if (typeof response?.response?.text === "function") {
+    return response.response.text();
+  }
+
+  return "";
+}
+
+function isServiceBusyError(error) {
+  const status = error?.status || error?.error?.status || error?.error?.code;
+
+  return status === 503 || String(error?.message || "").includes('"code":503');
+}
+
+async function generateStructuredJson({ prompt, schema }) {
+  let lastError = null;
+
+  for (const model of MODELS) {
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      try {
+        const response = await ai.models.generateContent({
+          model,
+          contents: prompt,
+          config: {
+            responseMimeType: "application/json",
+          },
+        });
+
+        const rawText = extractResponseText(response)
+          .replace(/```json/g, "")
+          .replace(/```/g, "")
+          .trim();
+
+        if (!rawText) {
+          throw new Error("AI returned empty response.");
+        }
+
+        const parsed = JSON.parse(rawText);
+        const validated = schema.safeParse(parsed);
+
+        if (!validated.success) {
+          console.log(JSON.stringify(validated.error.format(), null, 2));
+          throw new Error("AI response did not match required format.");
+        }
+
+        return validated.data;
+      } catch (error) {
+        lastError = error;
+
+        if (isServiceBusyError(error) && attempt < 3) {
+          await new Promise((resolve) => setTimeout(resolve, attempt * 2000));
+          continue;
+        }
+
+        if (error instanceof SyntaxError) {
+          continue;
+        }
+      }
+    }
+  }
+
+  throw lastError || new Error("All Gemini models are currently unavailable.");
+}
+
 /* -------------------------------------------------------------------------- */
 /*                               HTML TEMPLATE                                */
 /* -------------------------------------------------------------------------- */
@@ -95,21 +209,31 @@ function escapeHtml(value = "") {
 
 function renderResumeHtml(data) {
   const contactItems = [];
-  if (data.email) contactItems.push(data.email);
-  if (data.phone) contactItems.push(data.phone);
-  if (data.location) contactItems.push(data.location);
-  if (data.linkedin) contactItems.push("LinkedIn");
-  if (data.github) contactItems.push("GitHub");
-  if (data.portfolio) contactItems.push("Portfolio");
+  
+  const icons = {
+    email: `<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"></path><polyline points="22,6 12,13 2,6"></polyline></svg>`,
+    phone: `<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.7 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"></path></svg>`,
+    linkedin: `<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M16 8a6 6 0 0 1 6 6v7h-4v-7a2 2 0 0 0-2-2 2 2 0 0 0-2 2v7h-4v-7a6 6 0 0 1 6-6z"></path><rect x="2" y="9" width="4" height="12"></rect><circle cx="4" cy="4" r="2"></circle></svg>`,
+    github: `<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M9 19c-5 1.5-5-2.5-7-3m14 6v-3.87a3.37 3.37 0 0 0-.94-2.61c3.14-.35 6.44-1.54 6.44-7A5.44 5.44 0 0 0 20 4.77 5.07 5.07 0 0 0 19.91 1S18.73.65 16 2.48a13.38 13.38 0 0 0-7 0C6.27.65 5.09 1 5.09 1A5.07 5.07 0 0 0 5 4.77a5.44 5.44 0 0 0-1.5 3.78c0 5.42 3.3 6.61 6.44 7A3.37 3.37 0 0 0 9 18.13V22"></path></svg>`,
+    loc: `<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"></path><circle cx="12" cy="10" r="3"></circle></svg>`
+  };
 
-  const contactLine = contactItems.join(" | ");
+  if (data.email) contactItems.push(`<a href="mailto:${data.email}">${icons.email} ${escapeHtml(data.email)}</a>`);
+  if (data.phone) contactItems.push(`<span>${icons.phone} ${escapeHtml(data.phone)}</span>`);
+  if (data.location) contactItems.push(`<span>${icons.loc} ${escapeHtml(data.location)}</span>`);
+  if (data.linkedin) contactItems.push(`<a href="${data.linkedin}">${icons.linkedin} LinkedIn</a>`);
+  if (data.github) contactItems.push(`<a href="${data.github}">${icons.github} GitHub</a>`);
+
+  const contactLine = contactItems.join("");
 
   const skillsHtml = data.skillCategories
     .map(
       (item) => `
       <div class="skill-card">
-        <h4>${escapeHtml(item.category)}</h4>
-        <p>${item.skills.map(escapeHtml).join(", ")}</p>
+        <div class="skill-category">${escapeHtml(item.category)}</div>
+        <div class="skill-list">
+          ${item.skills.map(s => `<span class="skill-tag">${escapeHtml(s)}</span>`).join("")}
+        </div>
       </div>
     `,
     )
@@ -184,155 +308,138 @@ function renderResumeHtml(data) {
     `,
     )
     .join("");
-
   return `
 <!DOCTYPE html>
 <html>
-
 <head>
-<meta charset="UTF-8" />
-
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
-
-*{
-  margin:0;
-  padding:0;
-  box-sizing:border-box;
-}
-
-body{
-  font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+ :root {
+  --primary: #0f172a;
+  --accent: #2563eb;
+  --text-main: #1e293b;
+  --text-muted: #64748b;
+  --border: #cbd5e1;
+  --bg-soft: #f8fafc;
+ }
+ * { margin:0; padding:0; box-sizing:border-box; }
+ body {
+  font-family: 'Inter', sans-serif;
   background:#f3f4f6;
-  color:#111827;
-  line-height: 1.5;
-}
-
-.page{
+  color: var(--text-main);
+  line-height: 1.4;
+ }
+ .page {
   width:210mm;
   min-height:297mm;
   margin:auto;
   background:white;
-  padding:30px;
-}
-
-.header{
+  padding: 50px;
+ }
+ .header {
   text-align:center;
-  border-bottom:2px solid #111827;
-  padding-bottom:15px;
+  padding-bottom:20px;
   margin-bottom:20px;
-}
-
-.header h1{
-  font-size:34px;
+  border-bottom: 1px solid var(--border);
+ }
+ .header h1 {
+  font-size: 32px;
+  font-weight: 700;
+  margin-bottom: 4px;
+  color: var(--primary);
+  letter-spacing: -0.5px;
+ }
+ .role {
+  font-size:14px;
+  font-weight: 600;
+  color: var(--accent);
   margin-bottom:8px;
   text-transform: uppercase;
   letter-spacing: 1px;
-}
-
-.role{
-  font-size:16px;
-  font-weight: 600;
-  color:#374151;
-  margin-bottom:8px;
+ }
+ .contact {
+  font-size:10px;
+  color: var(--text-muted);
+  display: flex;
+  justify-content: center;
+  gap: 12px;
+  flex-wrap: wrap;
+ }
+ .contact a, .contact span { 
+  display: flex; 
+  align-items: center; 
+  gap: 4px; 
+  text-decoration: none; 
+  color: inherit; 
+ }
+ .section { margin-bottom: 20px; }
+ .section-title {
+  font-size: 11px;
+  font-weight: 700;
+  margin-bottom: 12px;
+  padding-bottom: 4px;
+  border-bottom: 1.5px solid var(--primary);
   text-transform: uppercase;
-}
-
-.contact{
-  font-size:12px;
-  color:#4b5563;
-}
-
-.section{
-  margin-bottom:20px;
-}
-
-.section-title{
-  font-size:16px;
-  font-weight: bold;
-  margin-bottom:10px;
-  padding-bottom:4px;
-  border-bottom:1px solid #111827;
-  text-transform:uppercase;
-  letter-spacing: 0.5px;
-}
-
-.summary{
-  font-size:12px;
-  text-align: justify;
-}
-
-.skills-grid{
-  display:grid;
-  grid-template-columns:1fr 1fr;
-  gap:10px;
-}
-
-.skill-card{
-  background:#f9fafb;
-  padding:10px;
+  letter-spacing: 1px;
+  color: var(--text-main);
+ }
+ .summary { font-size: 11.5px; text-align: justify; color: var(--text-muted); }
+ .skills-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+ }
+ .skill-card {
+  background: var(--bg-soft);
+  padding: 10px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+ }
+ .skill-category {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--accent);
+  margin-bottom: 6px;
+  text-transform: uppercase;
+ }
+ .skill-list { display: flex; flex-wrap: wrap; gap: 4px; }
+ .skill-tag {
+  font-size: 10px;
+  background: white;
+  padding: 2px 8px;
+  border: 1px solid var(--border);
   border-radius: 4px;
-}
-
-.skill-card h4{
-  font-size: 13px;
-  margin-bottom:4px;
-  color: #111827;
-}
-
-.skill-card p{
-  font-size:12px;
-  color: #4b5563;
-}
-
-.card{
-  margin-bottom:12px;
-}
-
-.top{
-  display:flex;
-  justify-content:space-between;
+  color: var(--text-main);
+ }
+ .card { margin-bottom: 14px; }
+ .top {
+  display: flex;
+  justify-content: space-between;
   align-items: baseline;
-  margin-bottom:4px;
-}
-
-.top h3{
-  font-size:14px;
+  margin-bottom: 4px;
+ }
+ .top h3 { font-size: 12.5px; font-weight: 700; color: var(--primary); }
+ .top span { font-size: 11px; font-weight: 500; color: var(--accent); }
+ .date { font-size: 10px; font-weight: 600; color: var(--text-muted); }
+ ul { list-style-type: none; padding-left: 12px; margin-top: 4px; }
+ li { 
+  font-size: 10.5px; 
+  margin-bottom: 3px; 
+  color: var(--text-muted);
+  position: relative;
+ }
+ li::before {
+  content: "•";
+  color: var(--accent);
+  position: absolute;
+  left: -12px;
   font-weight: bold;
-}
-
-.top span{
-  font-size:12px;
-  font-weight: 500;
-  color:#4b5563;
-  margin-left: 5px;
-}
-
-.date{
-  font-size:11px;
-  font-weight: 600;
-  color:#6b7280;
-  white-space: nowrap;
-}
-
-ul{
-  padding-left:16px;
-}
-
-li{
-  font-size:12px;
-  margin-bottom:2px;
-}
-
-.two-column{
-  display:grid;
+ }
+ .two-column {
+  display: grid;
   grid-template-columns: 1.6fr 1fr;
-  gap:25px;
-}
-
-.small-list li{
-  margin-bottom:4px;
-}
-
+  gap: 24px;
+ }
 </style>
 
 </head>
@@ -349,7 +456,7 @@ li{
     </div>
 
     <div class="contact">
-      ${escapeHtml(contactLine)}
+      ${contactLine}
     </div>
   </div>
 
@@ -488,6 +595,83 @@ async function generatePdf(html) {
 }
 
 /* -------------------------------------------------------------------------- */
+/*                       MAIN INTERVIEW REPORT FUNCTION                       */
+/* -------------------------------------------------------------------------- */
+
+async function generateInterviewReport({
+  resume,
+  selfDescription,
+  jobDescription,
+}) {
+  const prompt = `
+Create a personalized interview preparation report for the candidate below.
+
+Return ONLY valid JSON.
+No markdown.
+No explanations.
+
+Required JSON structure:
+
+{
+  "title": "",
+  "matchScore": 0,
+  "technicalQuestions": [
+    {
+      "question": "",
+      "intention": "",
+      "answer": ""
+    }
+  ],
+  "behavioralQuestions": [
+    {
+      "question": "",
+      "intention": "",
+      "answer": ""
+    }
+  ],
+  "skillGaps": [
+    {
+      "skill": "",
+      "severity": "low"
+    }
+  ],
+  "preparationPlan": [
+    {
+      "day": 1,
+      "focus": "",
+      "tasks": [""]
+    }
+  ]
+}
+
+Rules:
+- Create a short role-based title.
+- Set matchScore between 0 and 100.
+- Provide 5 technicalQuestions tailored to the job description and candidate profile.
+- Provide 4 behavioralQuestions tailored to the role.
+- Provide 3 to 6 skillGaps with severity as only low, medium, or high.
+- Provide a 7 day preparationPlan with concrete tasks.
+- Use the resume as the source of truth when available.
+- If resume details are limited, use the self description to personalize the answers.
+- Keep answers practical and interview-ready.
+
+Resume:
+${resume || "Not provided"}
+
+Self Description:
+${selfDescription || "Not provided"}
+
+Job Description:
+${jobDescription}
+`;
+
+  return generateStructuredJson({
+    prompt,
+    schema: interviewReportSchema,
+  });
+}
+
+/* -------------------------------------------------------------------------- */
 /*                           MAIN RESUME FUNCTION                             */
 /* -------------------------------------------------------------------------- */
 
@@ -521,6 +705,11 @@ Required JSON structure:
       "skills": []
     }
   ],
+  "analysis": {
+    "matchScore": 0,
+    "missingKeywords": [],
+    "improvementSuggestions": []
+  },
   "education": [
     {
       "degree": "",
@@ -550,10 +739,10 @@ Required JSON structure:
 }
 
 Rules:
-- Make it ATS friendly.
-- Make it realistic.
+- Use the provided 'Resume' as the absolute source of truth for work history and education.
+- Rewrite the content to align with the 'Job Description' while staying factually accurate.
+- Incorporate the 'Self Description' to personalize the professional summary.
 - Keep bullet points short.
-- Prioritize MERN stack skills.
 - Provide STRICTLY between 2 and 6 skillCategories. Do not exceed 6.
 - Fit within one page.
 
@@ -567,110 +756,12 @@ Job Description:
 ${jobDescription}
 `;
 
-  const MODELS = [
-    "gemini-1.5-flash",
-    "gemini-2.0-flash-exp",
-  ];
+  const validated = await generateStructuredJson({
+    prompt,
+    schema: outputSchema,
+  });
 
-  let response = null;
-
-  for (const modelName of MODELS) {
-    for (let attempt = 1; attempt <= 3; attempt++) {
-      try {
-        console.log(
-          `Trying ${modelName} | Attempt ${attempt}`,
-        );
-
-        response = await ai.models.generateContent({
-          model: modelName,
-
-          contents: prompt,
-
-          config: {
-            responseMimeType: "application/json",
-          },
-        });
-
-        break;
-      } catch (error) {
-        const status =
-          error?.status || error?.error?.status;
-
-        const is503 =
-          status === 503 ||
-          error?.message?.includes('"code":503');
-
-        console.log(error.message);
-
-        if (!is503 || attempt === 3) {
-          continue;
-        }
-
-        await new Promise((resolve) =>
-          setTimeout(resolve, attempt * 2000),
-        );
-      }
-    }
-
-    if (response) break;
-  }
-
-  if (!response) {
-    throw new Error(
-      "All Gemini models are currently unavailable.",
-    );
-  }
-
-  let rawText =
-    typeof response.text === "string"
-      ? response.text
-      : response.response?.text?.();
-
-  if (!rawText) {
-    console.log(response);
-
-    throw new Error(
-      "AI returned empty response.",
-    );
-  }
-
-  rawText = rawText
-    .replace(/```json/g, "")
-    .replace(/```/g, "")
-    .trim();
-
-  let parsed;
-
-  try {
-    parsed = JSON.parse(rawText);
-  } catch (err) {
-    console.log(rawText);
-
-    throw new Error(
-      "Invalid JSON returned by AI",
-    );
-  }
-
-  const validated =
-    resumeSchema.safeParse(parsed);
-
-  if (!validated.success) {
-    console.log(
-      JSON.stringify(
-        validated.error.format(),
-        null,
-        2,
-      ),
-    );
-
-    throw new Error(
-      "AI response did not match required format",
-    );
-  }
-
-  const html = renderResumeHtml(
-    validated.data,
-  );
+  const html = renderResumeHtml(validated);
 
   const pdf = await generatePdf(html);
 
@@ -678,5 +769,6 @@ ${jobDescription}
 }
 
 module.exports = {
+  generateInterviewReport,
   generateResumePdf,
 };
