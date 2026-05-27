@@ -6,6 +6,13 @@ const ai = new GoogleGenAI({
   apiKey: process.env.GOOGLE_GENAI_API_KEY,
 });
 
+const PRIMARY_MODEL = "gemini-2.5-flash";
+const FALLBACK_MODELS = ["gemini-2.0-flash"];
+const AI_MODELS = [PRIMARY_MODEL, ...FALLBACK_MODELS];
+const MAX_RETRIES_PER_MODEL = 2;
+const BASE_RETRY_DELAY_MS = 1500;
+let aiJobQueue = Promise.resolve();
+
 /* -------------------------------------------------------------------------- */
 /*                               RESUME SCHEMA                                */
 /* -------------------------------------------------------------------------- */
@@ -120,8 +127,6 @@ const interviewReportSchema = z.object({
   ),
 });
 
-const MODELS = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash"];
-
 function extractResponseText(response) {
   if (typeof response?.text === "string") {
     return response.text;
@@ -144,54 +149,133 @@ function isServiceBusyError(error) {
   return status === 503 || String(error?.message || "").includes('"code":503');
 }
 
+function isMissingModelError(error) {
+  const status = error?.status || error?.error?.status || error?.error?.code;
+
+  return status === 404 || String(error?.message || "").includes("not found");
+}
+
+function isAuthConfigurationError(error) {
+  const status = error?.status || error?.error?.status || error?.error?.code;
+  const message = String(error?.message || "");
+
+  return status === 401 || message.includes("API key should be set");
+}
+
+function createServiceError(message, status, cause) {
+  const error = new Error(message);
+  error.status = status;
+
+  if (cause) {
+    error.cause = cause;
+  }
+
+  return error;
+}
+
+function getRetryDelay(attempt) {
+  return BASE_RETRY_DELAY_MS * 2 ** (attempt - 1);
+}
+
+function enqueueAiJob(task) {
+  const queuedTask = aiJobQueue.catch(() => {}).then(task);
+  aiJobQueue = queuedTask.catch(() => {});
+
+  return queuedTask;
+}
+
 async function generateStructuredJson({ prompt, schema }) {
-  let lastError = null;
+  return enqueueAiJob(async () => {
+    if (!process.env.GOOGLE_GENAI_API_KEY) {
+      throw createServiceError(
+        "AI service is not configured right now. Please add the Gemini API key.",
+        503,
+      );
+    }
 
-  for (const model of MODELS) {
-    for (let attempt = 1; attempt <= 3; attempt++) {
-      try {
-        const response = await ai.models.generateContent({
-          model,
-          contents: prompt,
-          config: {
-            responseMimeType: "application/json",
-          },
-        });
+    let lastError = null;
 
-        const rawText = extractResponseText(response)
-          .replace(/```json/g, "")
-          .replace(/```/g, "")
-          .trim();
+    for (const model of AI_MODELS) {
+      for (let attempt = 1; attempt <= MAX_RETRIES_PER_MODEL; attempt++) {
+        try {
+          const response = await ai.models.generateContent({
+            model,
+            contents: prompt,
+            config: {
+              responseMimeType: "application/json",
+            },
+          });
 
-        if (!rawText) {
-          throw new Error("AI returned empty response.");
-        }
+          const rawText = extractResponseText(response)
+            .replace(/```json/g, "")
+            .replace(/```/g, "")
+            .trim();
 
-        const parsed = JSON.parse(rawText);
-        const validated = schema.safeParse(parsed);
+          if (!rawText) {
+            throw new Error("AI returned empty response.");
+          }
 
-        if (!validated.success) {
-          console.log(JSON.stringify(validated.error.format(), null, 2));
-          throw new Error("AI response did not match required format.");
-        }
+          const parsed = JSON.parse(rawText);
+          const validated = schema.safeParse(parsed);
 
-        return validated.data;
-      } catch (error) {
-        lastError = error;
+          if (!validated.success) {
+            console.log(JSON.stringify(validated.error.format(), null, 2));
+            throw new Error("AI response did not match required format.");
+          }
 
-        if (isServiceBusyError(error) && attempt < 3) {
-          await new Promise((resolve) => setTimeout(resolve, attempt * 2000));
-          continue;
-        }
+          return validated.data;
+        } catch (error) {
+          lastError = error;
 
-        if (error instanceof SyntaxError) {
-          continue;
+          if (isAuthConfigurationError(error)) {
+            throw createServiceError(
+              "AI service is not configured right now. Please try again later.",
+              503,
+              error,
+            );
+          }
+
+          if (isMissingModelError(error)) {
+            break;
+          }
+
+          if (isServiceBusyError(error) && attempt < MAX_RETRIES_PER_MODEL) {
+            await new Promise((resolve) =>
+              setTimeout(resolve, getRetryDelay(attempt)),
+            );
+            continue;
+          }
+
+          if (error instanceof SyntaxError && attempt < MAX_RETRIES_PER_MODEL) {
+            await new Promise((resolve) =>
+              setTimeout(resolve, getRetryDelay(attempt)),
+            );
+            continue;
+          }
+
+          break;
         }
       }
     }
-  }
 
-  throw lastError || new Error("All Gemini models are currently unavailable.");
+    if (isServiceBusyError(lastError)) {
+      throw createServiceError(
+        "AI service is busy right now. Please try again in a moment.",
+        503,
+        lastError,
+      );
+    }
+
+    if (isMissingModelError(lastError)) {
+      throw createServiceError(
+        "AI model is temporarily unavailable. Please try again later.",
+        503,
+        lastError,
+      );
+    }
+
+    throw lastError || createServiceError("AI generation failed.", 500);
+  });
 }
 
 /* -------------------------------------------------------------------------- */
@@ -225,8 +309,20 @@ function renderResumeHtml(data) {
   if (data.github) contactItems.push(`<a href="${data.github}">${icons.github} GitHub</a>`);
 
   const contactLine = contactItems.join("");
+  const hasSummary = Boolean(data.summary?.trim());
+  const hasSkills = Array.isArray(data.skillCategories) && data.skillCategories.length > 0;
+  const hasProjects = Array.isArray(data.projects) && data.projects.length > 0;
+  const hasExperience = Array.isArray(data.experience) && data.experience.length > 0;
+  const hasEducation = Array.isArray(data.education) && data.education.length > 0;
+  const hasCertifications =
+    Array.isArray(data.certifications) && data.certifications.length > 0;
+  const hasAchievements =
+    Array.isArray(data.achievements) && data.achievements.length > 0;
+  const hasTools =
+    Array.isArray(data.toolsAndPlatforms) && data.toolsAndPlatforms.length > 0;
+  const hasSidebar = hasEducation || hasCertifications || hasAchievements || hasTools;
 
-  const skillsHtml = data.skillCategories
+  const skillsHtml = (data.skillCategories || [])
     .map(
       (item) => `
       <div class="skill-card">
@@ -239,7 +335,7 @@ function renderResumeHtml(data) {
     )
     .join("");
 
-  const projectsHtml = data.projects
+  const projectsHtml = (data.projects || [])
     .map(
       (project) => `
       <div class="card">
@@ -260,11 +356,9 @@ function renderResumeHtml(data) {
     )
     .join("");
 
-  const experienceHtml =
-    data.experience.length > 0
-      ? data.experience
-          .map(
-            (exp) => `
+  const experienceHtml = (data.experience || [])
+    .map(
+      (exp) => `
       <div class="card">
         <div class="top">
           <div>
@@ -284,11 +378,10 @@ function renderResumeHtml(data) {
         </ul>
       </div>
     `,
-          )
-          .join("")
-      : `<p>No formal experience available.</p>`;
+    )
+    .join("");
 
-  const educationHtml = data.education
+  const educationHtml = (data.education || [])
     .map(
       (edu) => `
       <div class="card">
@@ -440,6 +533,27 @@ function renderResumeHtml(data) {
   grid-template-columns: 1.6fr 1fr;
   gap: 24px;
  }
+ .single-column {
+  display: block;
+ }
+ .stack-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+ }
+ .stack-list li {
+  list-style: none;
+  margin: 0;
+  padding: 4px 8px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: white;
+  color: var(--text-main);
+  font-size: 10px;
+ }
+ .stack-list li::before {
+  content: none;
+ }
 </style>
 
 </head>
@@ -460,6 +574,7 @@ function renderResumeHtml(data) {
     </div>
   </div>
 
+  ${hasSummary ? `
   <div class="section">
     <div class="section-title">
       Professional Summary
@@ -468,8 +583,9 @@ function renderResumeHtml(data) {
     <div class="summary">
       ${escapeHtml(data.summary)}
     </div>
-  </div>
+  </div>` : ""}
 
+  ${hasSkills ? `
   <div class="section">
     <div class="section-title">
       Skills
@@ -478,40 +594,45 @@ function renderResumeHtml(data) {
     <div class="skills-grid">
       ${skillsHtml}
     </div>
-  </div>
+  </div>` : ""}
 
-  <div class="two-column">
+  <div class="${hasSidebar ? "two-column" : "single-column"}">
 
     <div>
 
+      ${hasProjects ? `
       <div class="section">
         <div class="section-title">
           Projects
         </div>
 
         ${projectsHtml}
-      </div>
+      </div>` : ""}
 
+      ${hasExperience ? `
       <div class="section">
         <div class="section-title">
           Experience
         </div>
 
         ${experienceHtml}
-      </div>
+      </div>` : ""}
 
     </div>
 
+    ${hasSidebar ? `
     <div>
 
+      ${hasEducation ? `
       <div class="section">
         <div class="section-title">
           Education
         </div>
 
         ${educationHtml}
-      </div>
+      </div>` : ""}
 
+      ${hasCertifications ? `
       <div class="section">
         <div class="section-title">
           Certifications
@@ -522,8 +643,9 @@ function renderResumeHtml(data) {
             .map((item) => `<li>${escapeHtml(item)}</li>`)
             .join("")}
         </ul>
-      </div>
+      </div>` : ""}
 
+      ${hasAchievements ? `
       <div class="section">
         <div class="section-title">
           Achievements
@@ -534,21 +656,23 @@ function renderResumeHtml(data) {
             .map((item) => `<li>${escapeHtml(item)}</li>`)
             .join("")}
         </ul>
-      </div>
+      </div>` : ""}
 
+      ${hasTools ? `
       <div class="section">
         <div class="section-title">
           Tools & Platforms
         </div>
 
-        <ul class="small-list">
+        <ul class="stack-list">
           ${(data.toolsAndPlatforms || [])
             .map((item) => `<li>${escapeHtml(item)}</li>`)
             .join("")}
         </ul>
-      </div>
+      </div>` : ""}
 
     </div>
+    ` : ""}
 
   </div>
 

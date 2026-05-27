@@ -2,6 +2,20 @@ const { PDFParse } = require("pdf-parse");
 const interviewReportModel = require("../models/interviewReport.model");
 const { generateInterviewReport, generateResumePdf } = require("../services/ai.service")
 
+function sendAiErrorResponse(res, error, fallbackMessage) {
+  const status = error?.status || error?.error?.status || error?.error?.code;
+
+  if (status === 503) {
+    return res.status(503).json({
+      message: error.message || "AI service is busy right now. Please try again in a moment.",
+    });
+  }
+
+  return res.status(500).json({
+    message: fallbackMessage,
+  });
+}
+
 async function generateInterViewReportController(req, res) {
   try {
     const { resumeDescription, selfDescription, jobDescription } = req.body;
@@ -41,17 +55,11 @@ async function generateInterViewReportController(req, res) {
   } catch (error) {
     console.error(error);
 
-    const status = error?.status || error?.error?.code;
-
-    if (status === 503) {
-      return res.status(503).json({
-        message: "AI service is busy right now. Please try again in a moment.",
-      });
-    }
-
-    return res.status(500).json({
-      message: "Failed to generate interview report.",
-    });
+    return sendAiErrorResponse(
+      res,
+      error,
+      "Failed to generate interview report.",
+    );
   }
 }
 
@@ -133,9 +141,11 @@ async function generateResumePdfController(req, res) {
   } catch (error) {
     console.log("PDF ERROR:", error);
 
-    return res.status(500).json({
-      message: error.message || "Failed to generate resume PDF",
-    });
+    return sendAiErrorResponse(
+      res,
+      error,
+      "Failed to generate resume PDF.",
+    );
   }
 }
 
