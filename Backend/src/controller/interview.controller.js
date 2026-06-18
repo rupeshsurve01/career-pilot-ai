@@ -1,6 +1,9 @@
-const { PDFParse } = require("pdf-parse");
 const interviewReportModel = require("../models/interviewReport.model");
 const { generateInterviewReport, generateResumePdf } = require("../services/ai.service")
+
+// NOTE: `pdf-parse` is intentionally loaded lazily inside request handlers.
+// Railway/containers sometimes crash on module init with incompatible Node/polyfill behavior.
+
 
 function sendAiErrorResponse(res, error, fallbackMessage) {
   const status = error?.status || error?.error?.status || error?.error?.code;
@@ -22,11 +25,21 @@ async function generateInterViewReportController(req, res) {
     let resumeText = "";
 
     if (req.file?.buffer) {
-      const parser = new PDFParse({ data: req.file.buffer });
-      const resumeContent = await parser.getText();
-      resumeText = resumeContent.text;
-      await parser.destroy();
+      try {
+        // Lazy import so the whole app doesn't crash during startup
+        // if pdf-parse is incompatible with the runtime.
+        const { PDFParse } = await import("pdf-parse");
+
+        const parser = new PDFParse({ data: req.file.buffer });
+        const resumeContent = await parser.getText();
+        resumeText = resumeContent.text;
+        await parser.destroy();
+      } catch (err) {
+        console.warn("PDF parsing failed; continuing without extracted resume text.", err?.message || err);
+        // If pdf parsing fails, keep resumeText empty and allow AI generation to use other fields.
+      }
     }
+
 
     const interViewReportByAi = await generateInterviewReport({
       resume: resumeText,
