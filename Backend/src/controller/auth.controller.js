@@ -1,6 +1,19 @@
-const bcrypt = require("bcryptjs");const userModel = require("../models/user.model");
+const bcrypt = require("bcryptjs");
+const userModel = require("../models/user.model");
 const jwt = require("jsonwebtoken");
-const tokenBlacklistModel = require("../models/blacklist.model")
+const tokenBlacklistModel = require("../models/blacklist.model");
+
+function getCookieOptions() {
+  const isProd = process.env.NODE_ENV === "production";
+
+  return {
+    httpOnly: true,
+    secure: isProd, // HTTPS only in production
+    sameSite: isProd ? "none" : "lax", // cross-site cookie on production
+    path: "/",
+    maxAge: 24 * 60 * 60 * 1000, // 1 day
+  };
+}
 
 async function registerUserController(req, res) {
   try {
@@ -32,24 +45,21 @@ async function registerUserController(req, res) {
       expiresIn: "1d",
     });
 
-    res.cookie("token", token);
+    res.cookie("token", token, getCookieOptions());
 
-    return res
-      .status(201)
-      .json({ message: "User registered successfully", 
-        user: {
+    return res.status(201).json({
+      message: "User registered successfully",
+      user: {
         id: user._id,
         username: user.username,
         email: user.email,
       },
-       });
-
+    });
   } catch (error) {
     console.error(error);
     return res.status(500).json({ message: "Internal server error" });
   }
 }
-
 
 async function loginUserController(req, res) {
   try {
@@ -75,7 +85,7 @@ async function loginUserController(req, res) {
       expiresIn: "1d",
     });
 
-    res.cookie("token", token);
+    res.cookie("token", token, getCookieOptions());
 
     return res.status(201).json({
       message: "User logged in successfully",
@@ -91,40 +101,40 @@ async function loginUserController(req, res) {
   }
 }
 
-
-async function  logoutUserController(req, res){
-
-  const token = req.cookies.token
+async function logoutUserController(req, res) {
+  const token = req.cookies.token;
 
   if (token) {
-    await tokenBlacklistModel.create({ token })
+    await tokenBlacklistModel.create({ token });
   }
 
-  res.clearCookie("token")
+  res.clearCookie("token", {
+    path: "/",
+    sameSite: process.env.NODE_ENV === "production" ? "none" : "lax",
+    secure: process.env.NODE_ENV === "production",
+    httpOnly: true,
+  });
 
-  res.status(200).json({
-    message: "User Logged out Successfully"
-  })
+  return res.status(200).json({ message: "User Logged out Successfully" });
 }
 
-
 async function getMeController(req, res) {
-   
-  const user = await userModel.findById(req.user.id)
+  const user = await userModel.findById(req.user.id);
 
-  res.status(200).json({
+  return res.status(200).json({
     message: "User Details fetched Successfully",
-    user:{
+    user: {
       id: user._id,
       username: user.username,
-      email: user.email
-    }
-  })
+      email: user.email,
+    },
+  });
 }
 
 module.exports = {
   registerUserController,
   loginUserController,
   logoutUserController,
-  getMeController
+  getMeController,
 };
+

@@ -8,9 +8,10 @@ const app = express();
 app.use(express.json()); // allows data reading from a request
 app.use(cookieParser());
 app.use(cors({
-    origin: "http://localhost:5173",
-    credentials: true
+    origin: process.env.FRONTEND_ORIGIN || "http://localhost:5173",
+    credentials: true,
 }))
+
 
 app.get("/", (req, res) => {
     res.json({
