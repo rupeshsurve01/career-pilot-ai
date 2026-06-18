@@ -12,6 +12,13 @@ app.use(cors({
     credentials: true
 }))
 
+app.get("/", (req, res) => {
+    res.json({
+        success: true,
+        message: "CareerPilot AI Backend Running"
+    });
+});
+
 // require all thr routes here
 const authRouter = require("./routes/auth.routes");
 const interviewRouter = require("./routes/interview.routes")
