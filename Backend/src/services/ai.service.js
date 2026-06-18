@@ -152,6 +152,13 @@ function isServiceBusyError(error) {
   return status === 503 || String(error?.message || "").includes('"code":503');
 }
 
+function isRateLimitError(error) {
+  // Gemini quota/rate limit returns 429 (RESOURCE_EXHAUSTED)
+  const status = error?.status || error?.error?.status || error?.error?.code;
+  return status === 429 || String(error?.message || "").includes("RESOURCE_EXHAUSTED");
+}
+
+
 function isMissingModelError(error) {
   const status = error?.status || error?.error?.status || error?.error?.code;
 
@@ -242,12 +249,21 @@ async function generateStructuredJson({ prompt, schema }) {
             break;
           }
 
+          if (isRateLimitError(error) && attempt < MAX_RETRIES_PER_MODEL) {
+            // quota/rate limit: treat as retryable
+            await new Promise((resolve) =>
+              setTimeout(resolve, getRetryDelay(attempt)),
+            );
+            continue;
+          }
+
           if (isServiceBusyError(error) && attempt < MAX_RETRIES_PER_MODEL) {
             await new Promise((resolve) =>
               setTimeout(resolve, getRetryDelay(attempt)),
             );
             continue;
           }
+
 
           if (error instanceof SyntaxError && attempt < MAX_RETRIES_PER_MODEL) {
             await new Promise((resolve) =>
@@ -259,6 +275,14 @@ async function generateStructuredJson({ prompt, schema }) {
           break;
         }
       }
+    }
+
+    if (isRateLimitError(lastError)) {
+      throw createServiceError(
+        "AI quota/rate limit exceeded. Please try again shortly.",
+        503,
+        lastError,
+      );
     }
 
     if (isServiceBusyError(lastError)) {
@@ -276,6 +300,7 @@ async function generateStructuredJson({ prompt, schema }) {
         lastError,
       );
     }
+
 
     throw lastError || createServiceError("AI generation failed.", 500);
   });
