@@ -1,6 +1,9 @@
 const { GoogleGenAI } = require("@google/genai");
 const { z } = require("zod");
-const puppeteer = require("puppeteer");
+
+// puppeteer is ESM in recent versions; using require() breaks on Railway/Node with ERR_REQUIRE_ESM.
+// Lazy-load it inside generatePdf() instead of at module init.
+
 
 const ai = new GoogleGenAI({
   apiKey: process.env.GOOGLE_GENAI_API_KEY,
@@ -689,7 +692,12 @@ function renderResumeHtml(data) {
 /* -------------------------------------------------------------------------- */
 
 async function generatePdf(html) {
+  // Lazy-load so app startup doesn't fail if puppeteer can't be required at module init.
+  const puppeteerModule = await import("puppeteer");
+  const puppeteer = puppeteerModule.default || puppeteerModule;
+
   const browser = await puppeteer.launch({
+
     headless: true,
     args: ["--no-sandbox", "--disable-setuid-sandbox"],
   });
