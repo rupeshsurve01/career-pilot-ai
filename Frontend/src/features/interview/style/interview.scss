@@ -714,6 +714,8 @@ $severity-low:    $success;
     }
 }
 
+@import "./responsive-fixes";
+
 // ── Responsive ───────────────────────────────────────────────────────────────
 @media (max-width: 1100px) {
 

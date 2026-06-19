@@ -1,0 +1,25 @@
+/* UX/Responsive improvements (mobile-first overrides) */
+
+@media (max-width: 480px) {
+  .interview-nav {
+    padding: 1.25rem 0.75rem;
+  }
+
+  .interview-sidebar {
+    padding: 1.25rem 0.9rem;
+  }
+
+  .interview-content {
+    padding: 1rem;
+  }
+
+  .q-card__question {
+    font-size: 0.9rem;
+  }
+
+  .match-score__ring {
+    width: 100px;
+    height: 100px;
+  }
+}
+

@@ -5,7 +5,7 @@ const cors = require("cors")
 const app = express();
 
 
-app.use(express.json()); // allows data reading from a request
+app.use(express.json()); 
 app.use(cookieParser());
 const corsOrigins = (process.env.FRONTEND_ORIGIN || "http://localhost:5173")
   .split(",")
@@ -25,7 +25,7 @@ app.use(
   }),
 );
 
-app.options("*", cors());
+app.options("/", cors());
 
 
 app.get("/", (req, res) => {
