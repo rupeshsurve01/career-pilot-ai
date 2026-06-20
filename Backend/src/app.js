@@ -15,9 +15,14 @@ const corsOrigins = (process.env.FRONTEND_ORIGIN || "http://localhost:5173")
 app.use(
   cors({
     origin: (origin, cb) => {
+      // allow non-browser requests (no Origin header)
       if (!origin) return cb(null, true);
+
+      // reflect allowed origins
       if (corsOrigins.includes(origin)) return cb(null, true);
-      return cb(new Error(`CORS blocked origin: ${origin}`));
+
+      // deny explicitly (prevents browser treating it as a generic network error)
+      return cb(null, false);
     },
     credentials: true,
     methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
@@ -25,7 +30,8 @@ app.use(
   }),
 );
 
-app.options("/", cors());
+app.options("/", cors({ origin: true, credentials: true }));
+
 
 
 app.get("/", (req, res) => {
