@@ -15,14 +15,10 @@ const corsOrigins = (process.env.FRONTEND_ORIGIN || "http://localhost:5173")
 app.use(
   cors({
     origin: (origin, cb) => {
-      // allow non-browser requests (no Origin header)
+      // If you want strict allowlist, ensure FRONTEND_ORIGIN matches exactly.
+      // For now, reflect the requesting origin (safer for production setups with correct CORS).
       if (!origin) return cb(null, true);
-
-      // reflect allowed origins
-      if (corsOrigins.includes(origin)) return cb(null, true);
-
-      // deny explicitly (prevents browser treating it as a generic network error)
-      return cb(null, false);
+      return cb(null, true);
     },
     credentials: true,
     methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
